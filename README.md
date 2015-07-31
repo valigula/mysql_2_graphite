@@ -7,3 +7,5 @@ Modifications include
   * Not dependencies for clooectd. 
   * Able to send the data to graphite easily
 
+TBD
+ * debug mode it wont sent the info to graphite only print it out
