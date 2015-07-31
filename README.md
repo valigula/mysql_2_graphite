@@ -4,7 +4,7 @@ Special thanks to: # Author: Chris Boulton <chris@chrisboulton.com> https://gith
 
 I have used the code for the above repo. 
 Modifications include 
-  * Not dependencies for clooectd. 
+  * Not dependencies for collectd. 
   * Able to send the data to graphite easily
 
 TBD
