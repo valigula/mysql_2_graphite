@@ -3,20 +3,21 @@ import re
 import MySQLdb
 import socket
 import time
-import sys, getopt
+import sys
+import getopt
 import yaml
 
 GRAPHITE_CONFIG = {
-    'Server'    : '',
-    'Port'      : 2003
+    'Server': '172.31.31.122',
+    'Port': 2003
 }
 
 MYSQL_CONFIG = {
-    'Host':           '',
-    'Port':           3306,
-    'User':           '',
-    'Password':       '',
-    'Db' :             '',
+    'Host': 'local',
+    'Port': 3306,
+    'User': '',
+    'Password': '',
+    'Db': '',
 }
 
 MYSQL_STATUS_VARS = {
@@ -159,6 +160,11 @@ MYSQL_VARS = [
     'thread_cache_size',
     'thread_concurrency',
     'tmp_table_size',
+    'key_buffer_size',
+    'read_rnd_buffer_size',
+    'sort_buffer_size',
+    'binlog_cache_size',
+    'thread_stack',
 ]
 
 MYSQL_PROCESS_STATES = {
@@ -200,7 +206,7 @@ MYSQL_INNODB_STATUS_VARS = {
     'pending_buf_pool_flushes': 'gauge',
     'pending_chkp_writes': 'gauge',
     'pending_ibuf_aio_reads': 'gauge',
-    'pending_log_writes':'gauge',
+    'pending_log_writes': 'gauge',
     'queries_inside': 'gauge',
     'queries_queued': 'gauge',
     'read_views': 'gauge',
@@ -235,15 +241,15 @@ MYSQL_INNODB_STATUS_MATCHES = {
         'pending_log_writes': 0,
         'pending_chkp_writes': 4,
     },
-    # Page hash 
+    # Page hash
     'Page hash    ': {
         'page_hash_memory': 2,
     },
-    # File system 
+    # File system
     'File system    ': {
         'file_system_memory': 2,
     },
-    # Lock system  
+    # Lock system
     'Lock system    ': {
         'lock_system_memory': 2,
     },
@@ -267,26 +273,32 @@ MYSQL_INNODB_STATUS_MATCHES = {
     },
 }
 
+
 def set_mysql_config(dbconn):
     try:
         stream = open("config.yml", "r")
         docs = yaml.load_all(stream)
         for doc in docs:
-            for section,parameter in doc.items():
-                #print doc["local"]["host"]
-                MYSQL_CONFIG["host"] =doc['mysql'][dbconn]["host"]
-                MYSQL_CONFIG["Port"] =doc['mysql'][dbconn]["port"]
-                MYSQL_CONFIG["User"] =doc['mysql'][dbconn]["user"]
-                MYSQL_CONFIG["Password"] =doc['mysql'][dbconn]["password"]
-                MYSQL_CONFIG["Db"] =doc['mysql'][dbconn]["db"]
-    except :
-        print "Error >>> set_mysql_config param not found" + dbconn
+            for section, parameter in doc.items():
+                print doc['mysql'][dbconn]["host"]
+                MYSQL_CONFIG["Host"] = doc['mysql'][dbconn]["host"]
+                MYSQL_CONFIG["Port"] = doc['mysql'][dbconn]["port"]
+                MYSQL_CONFIG["User"] = doc['mysql'][dbconn]["user"]
+                MYSQL_CONFIG["Password"] = doc['mysql'][dbconn]["password"]
+                MYSQL_CONFIG["Db"] = doc['mysql'][dbconn]["db"]
+
+        print  "set_mysql_config "+dbconn+ " successfull"
+
+    except Exception as e :
+        print "Error >>> set_mysql_config param not found: " + dbconn
+        print "Exception " + str(e)
         sys.exit(2)
 
-def get_mysql_conn(pdbconn):
-    set_mysql_config(pdbconn)    
-    
-    try :
+
+def get_mysql_conn(_dbconn):
+    set_mysql_config(_dbconn)
+
+    try:
         return MySQLdb.connect(
             host=MYSQL_CONFIG['Host'],
             port=MYSQL_CONFIG["Port"],
@@ -294,13 +306,18 @@ def get_mysql_conn(pdbconn):
             db=MYSQL_CONFIG["Db"],
             user=MYSQL_CONFIG["User"]
         )
-    except:
-        print "Error get_mysql_conn" + dbconn
+        print  "get_mysql_conn "+_dbconn+ " successfull"
+
+    except Exception as e :
+        print "Error get_mysql_conn: " + _dbconn
+        print "Error ***** " + str(e)
+
 
 def mysql_query(conn, query):
     cur = conn.cursor(MySQLdb.cursors.DictCursor)
     cur.execute(query)
     return cur
+
 
 def fetch_mysql_process_states(conn):
     global MYSQL_PROCESS_STATES
@@ -308,13 +325,16 @@ def fetch_mysql_process_states(conn):
     states = MYSQL_PROCESS_STATES.copy()
     for row in result.fetchall():
         state = row['State']
-        if state == '' or state == None: state = 'none'
+        if state == '' or state == None:
+            state = 'none'
         state = re.sub(r'^(Table lock|Waiting for .*lock)$', "Locked", state)
         state = state.lower().replace(" ", "_")
-        if state not in states: state = 'other'
+        if state not in states:
+            state = 'other'
         states[state] += 1
 
     return states
+
 
 def fetch_mysql_variables(conn):
     global MYSQL_VARS
@@ -326,6 +346,7 @@ def fetch_mysql_variables(conn):
 
     return variables
 
+
 def fetch_mysql_status(conn):
     result = mysql_query(conn, 'SHOW GLOBAL STATUS')
     status = {}
@@ -334,15 +355,19 @@ def fetch_mysql_status(conn):
 
     # calculate the number of unpurged txns from existing variables
     if 'Innodb_max_trx_id' in status:
-        status['Innodb_unpurged_txns'] = int(status['Innodb_max_trx_id']) - int(status['Innodb_purge_trx_id'])
+        status['Innodb_unpurged_txns'] = int(
+            status['Innodb_max_trx_id']) - int(status['Innodb_purge_trx_id'])
 
     if 'Innodb_lsn_last_checkpoint' in status:
-        status['Innodb_uncheckpointed_bytes'] = int(status['Innodb_lsn_current'])- int(status['Innodb_lsn_last_checkpoint'])
+        status['Innodb_uncheckpointed_bytes'] = int(
+            status['Innodb_lsn_current']) - int(status['Innodb_lsn_last_checkpoint'])
 
     if 'Innodb_lsn_flushed' in status:
-        status['Innodb_unflushed_log'] = int(status['Innodb_lsn_current']) - int(status['Innodb_lsn_flushed'])
+        status['Innodb_unflushed_log'] = int(
+            status['Innodb_lsn_current']) - int(status['Innodb_lsn_flushed'])
 
     return status
+
 
 def fetch_mysql_response_times(conn):
     response_times = {}
@@ -361,26 +386,28 @@ def fetch_mysql_response_times(conn):
 
         # fill in missing rows with zeros
         if not row:
-            row = { 'count': 0, 'total': 0 }
+            row = {'count': 0, 'total': 0}
 
         response_times[i] = {
-            'time':  float(row['time']),
+            'time': float(row['time']),
             'count': int(row['count']),
             'total': round(float(row['total']) * 1000000, 0),
         }
     return response_times
 
+
 def fetch_innodb_stats(conn):
     global MYSQL_INNODB_STATUS_MATCHES, MYSQL_INNODB_STATUS_VARS
     result = mysql_query(conn, 'SHOW ENGINE INNODB STATUS')
-    row    = result.fetchone()
+    row = result.fetchone()
     status = row['Status']
-    stats  = dict.fromkeys(MYSQL_INNODB_STATUS_VARS.keys(), 0)
+    stats = dict.fromkeys(MYSQL_INNODB_STATUS_VARS.keys(), 0)
 
     for line in status.split("\n"):
         line = line.strip()
-        row  = re.split(r' +', re.sub(r'[,;] ', ' ', line))
-        if line == '': continue
+        row = re.split(r' +', re.sub(r'[,;] ', ' ', line))
+        if line == '':
+            continue
         if line.find("---TRANSACTION") != -1:
             stats['current_transactions'] += 1
             if line.find("ACTIVE") != -1:
@@ -393,7 +420,8 @@ def fetch_innodb_stats(conn):
                 stats['innodb_lock_structs'] += int(row[0])
         else:
             for match in MYSQL_INNODB_STATUS_MATCHES:
-                if line.find(match) == -1: continue
+                if line.find(match) == -1:
+                    continue
                 for key in MYSQL_INNODB_STATUS_MATCHES[match]:
                     value = MYSQL_INNODB_STATUS_MATCHES[match][key]
                     if type(value) is int:
@@ -403,66 +431,71 @@ def fetch_innodb_stats(conn):
                 break
     return stats
 
-def send_2_graphite(message):
-    timestamp = int(time.time())
-    print 'path_to_graphite.%s' % message +  " " + str(timestamp)
-   #     sock = socket.socket()
-   #     sock.connect((CARBON_SERVER, CARBON_PORT))
-   #     sock.sendall(message)
-   #     sock.close()
 
-def read_callback(pdbconn):
+def send_2_graphite(_message):
+    timestamp = int(time.time())
+
+    message = '%s%s %d\n' % ('devserver.mysql.', _message, timestamp)
+    print message
+    sock = socket.socket()
+    sock.connect(('52.31.147.45', 2003))
+    sock.sendall(message)
+    sock.close()
+
+
+def read_callback(_dbconn):
     global MYSQL_STATUS_VARS
-    conn = get_mysql_conn(pdbconn)
+    conn = get_mysql_conn(_dbconn)
 
     mysql_status = fetch_mysql_status(conn)
     for key in mysql_status:
-        if mysql_status[key] == '': mysql_status[key] = 0
-        send_2_graphite (key + " " + str(mysql_status[key]))
+        if mysql_status[key] == '':
+            mysql_status[key] = 0
+        send_2_graphite(key + " " + str(mysql_status[key]))
 
     mysql_variables = fetch_mysql_variables(conn)
     for key in mysql_variables:
-        send_2_graphite (key + " " + str(mysql_variables[key] ))
+        send_2_graphite(key + " " + str(mysql_variables[key]))
 
     #mysql_master_status = fetch_mysql_master_stats(conn)
-    #for key in mysql_master_status:
+    # for key in mysql_master_status:
     #    print key
-    #    print mysql_master_status[key] 
+    #    print mysql_master_status[key]
 
     mysql_states = fetch_mysql_process_states(conn)
     for key in mysql_states:
-        send_2_graphite (key + " " + str(mysql_states[key] ))
+        send_2_graphite(key + " " + str(mysql_states[key]))
 
     #slave_status = fetch_mysql_slave_stats(conn)
-    #for key in slave_status:
+    # for key in slave_status:
     #    print key
-    #    print slave_status[key] 
+    #    print slave_status[key]
 
     response_times = fetch_mysql_response_times(conn)
     for key in response_times:
-        send_2_graphite (key + " " + str(response_times[key] ))
+        send_2_graphite(key + " " + str(response_times[key]))
 
     innodb_status = fetch_innodb_stats(conn)
     for key in MYSQL_INNODB_STATUS_VARS:
-        if key not in innodb_status: continue
-        send_2_graphite (key + " " + str(innodb_status[key] ))
+        if key not in innodb_status:
+            continue
+        send_2_graphite(key + " " + str(innodb_status[key]))
+
 
 def main(argv):
-   try:
-      opts, args = getopt.getopt(argv,"hd:ov:")
-   except getopt.GetoptError:
-      print 'Error: >> parameter not recognized, accpeted parameters are: \n -h \n -d'
-      sys.exit(2)
-   for opt, arg in opts:
-      if opt == '-h':
-         print '-h help \n' \
-               '-d connection name \n'\
-               '-v verbose print out do not send to graphite '    
-         sys.exit()
-      elif opt in ("-d"):
-        read_callback(arg)
+    try:
+        opts, args = getopt.getopt(argv, "hd:ov:")
+    except getopt.GetoptError:
+        print 'Error: >> parameter not recognized, accpeted parameters are: \n -h \n -d'
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print '-h help \n' \
+                  '-d connection name \n'\
+                  '-v verbose print out do not send to graphite '
+            sys.exit()
+        elif opt in ("-d"):
+            read_callback(arg)
 
 if __name__ == "__main__":
-   main(sys.argv[1:])
-
-
+    main(sys.argv[1:])
